@@ -1,0 +1,1 @@
+/home/ubuntu/zjc/Switch-NeRF/switch_nerf/eval_image.py --config=switch_nerf/configs/switch_nerf/moe.yaml --use_moe --exp_name=moe --dataset_path=/data/zcq/switchnerf/building-pixsfm --i_print=1000 --moe_expert_type=seqexperts --model_chunk_size=131072 --ckpt_path=Switch-NeRF-ckpt/building.pt --expertmlp2seqexperts --use_moe_external_gate --use_gate_input_norm

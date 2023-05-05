@@ -5,8 +5,8 @@ import torch.nn.functional as F
 import lpips as plips
 
 
-def psnr(rgbs: torch.Tensor, target_rgbs: torch.Tensor) -> float:
-    mse = torch.mean((rgbs - target_rgbs) ** 2)
+def psnr(sigma: torch.Tensor, gt: torch.Tensor) -> float:
+    mse = torch.mean(( sigma- gt) ** 2)
     return -10 * torch.log10(mse).item()
 
 

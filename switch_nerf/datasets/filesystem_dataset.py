@@ -18,6 +18,13 @@ from switch_nerf.ray_utils import get_ray_directions, get_rays, get_rays_batch
 from functools import partial
 import random
 
+from dataclasses import dataclass
+from einops import rearrange
+from scipy import ndimage
+from typing import List, Union
+import tifffile
+
+
 RAY_CHUNK_SIZE = 64 * 1024
 
 
@@ -341,3 +348,173 @@ class FilesystemDataset(Dataset):
             futures.append(future)
 
         return futures
+
+# class RandomPointSampler3D:
+#     def __init__(
+#         self,
+#         coordinates: torch.Tensor,
+#         data: torch.Tensor,
+
+#         n_points_per_sampling: int,
+#     ) -> None:
+#         self.n_points_per_sampling = n_points_per_sampling
+#         self.flattened_coordinates = rearrange(coordinates, "d h w c-> (d h w) c")
+#         self.flattened_data = rearrange(data, "d h w c-> (d h w) c")
+#         # self.flattened_weight_map = rearrange(weight_map, "d h w c-> (d h w) c")
+#         self.n_total_points = self.flattened_data.shape[0]
+
+#     def next(
+#         self,
+#     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+#         sampled_idxs = torch.randint(
+#             0, self.n_total_points, (self.n_points_per_sampling,), device="cuda"
+#         )# zjc 'cuda'
+#         sampled_coords = self.flattened_coordinates[sampled_idxs, :]
+#         sampled_data = self.flattened_data[sampled_idxs, :]
+#         # sampled_weight_map = self.flattened_weight_map[sampled_idxs, :]
+#         return sampled_coords, sampled_data
+
+def denoise(
+    data: np.ndarray,
+    denoise_level: int,
+    denoise_close: Union[bool, List[int]],
+) -> np.ndarray:
+    denoised_data = np.copy(data)
+    if denoise_close == False:
+        # using 'denoise_level' as a hard threshold,
+        # the pixel with instensity below this threshold will be set to zero
+        denoised_data[data <= denoise_level] = 0
+    else:
+        # using 'denoise_level' as a soft threshold,
+        # only the pixel with itself and neighbors instensities below this threshold will be set to zero
+        denoised_data[
+            ndimage.binary_opening(
+                data <= denoise_level,
+                structure=np.ones(tuple(list(denoise_close) + [1])),
+                iterations=1,
+            )
+        ] = 0
+    return denoised_data
+
+@dataclass
+class SideInfos3D:
+    dtype: str = ""
+    depth: int = 0
+    height: int = 0
+    width: int = 0
+    original_min: int = 0
+    original_max: int = 0
+    normalized_min: int = 0
+    normalized_max: int = 0
+
+@dataclass
+class SideInfos4D:
+    dtype: str = ""
+    time: int = 0
+    depth: int = 0
+    height: int = 0
+    width: int = 0
+    original_min: int = 0
+    original_max: int = 0
+    normalized_min: int = 0
+    normalized_max: int = 0
+
+def normalize(
+    data: np.ndarray, 
+    sideinfos: Union[SideInfos3D, SideInfos4D]
+) -> np.ndarray:
+    """
+    use minmax normalization to scale and offset the data range to [normalized_min,normalized_max]
+    """
+    normalized_min, normalized_max = sideinfos.normalized_min, sideinfos.normalized_max
+    dtype = data.dtype.name
+    data = data.astype(np.float32)
+    original_min = float(data.min())
+    original_max = float(data.max())
+    data = (data - original_min) / (original_max - original_min)
+    data *= normalized_max - normalized_min
+    data += normalized_min
+    sideinfos.dtype = dtype
+    sideinfos.original_min = original_min
+    sideinfos.original_max = original_max
+    return data
+
+def inv_normalize(
+    data: np.ndarray, 
+    sideinfos: Union[SideInfos3D, SideInfos4D]
+) -> np.ndarray:
+    dtype = sideinfos.dtype
+    if dtype == "uint8":
+        dtype = np.uint8
+    elif dtype == "uint12":
+        dtype = np.uint12
+    elif dtype == "uint16":
+        dtype = np.uint16
+    elif dtype == "float32":
+        dtype = np.float32
+    elif dtype == "float64":
+        dtype = np.float64
+    else:
+        raise NotImplementedError
+    data -= sideinfos.normalized_min
+    data /= sideinfos.normalized_max - sideinfos.normalized_min
+    data = np.clip(data, 0, 1)
+    data = (
+        data * (sideinfos.original_max - sideinfos.original_min)
+        + sideinfos.original_min
+    )
+    data = np.array(data, dtype=dtype)
+    return data
+
+sideinfos = SideInfos3D()
+sideinfos.normalized_min = 0
+sideinfos.normalized_max = 100
+
+class Mydata(Dataset):
+    def __init__(self, hparams) -> None:
+        super(Mydata, self).__init__()
+        #读取data --> denoise --> normalize
+        self.data_path = hparams.data_path
+        self.data = tifffile.imread(self.data_path)
+        if len(self.data.shape) == 3:
+            self.data = self.data[..., None]
+        assert (
+            len(self.data.shape) == 4
+        ), "Only DHWC data is allowed. Current data shape is {}.".format(self.data.shape)
+        
+        self.denoise_data = denoise(self.data, denoise_level=0, denoise_close= [2,2,2] )
+        self.normalized_data = normalize(self.denoise_data, sideinfos)
+
+        #生成坐标
+        sideinfos.coord_normalized_min = -1
+        sideinfos.coord_normalized_max = 1
+        sideinfos.depth, sideinfos.height, sideinfos.width, _ = self.data.shape
+        self.coordinates = torch.stack(
+            torch.meshgrid(
+                torch.linspace(sideinfos.coord_normalized_min, sideinfos.coord_normalized_max, sideinfos.depth),
+                torch.linspace(
+                    sideinfos.coord_normalized_min, sideinfos.coord_normalized_max, sideinfos.height
+                ),
+                torch.linspace(sideinfos.coord_normalized_min, sideinfos.coord_normalized_max, sideinfos.width),
+                indexing="ij",
+            ),
+            axis=-1,
+        )
+        # self.sampler = RandomPointSampler3D(
+        #     self.coordinates, self.normalized_data, hparams.n_random_training_samples
+        # )
+        self.normalized_data = rearrange(self.normalized_data, 'd h w c -> (d h w) c')
+        self.coordinates =  rearrange(self.coordinates, 'd h w c -> (d h w) c')
+
+    def __len__(self):
+        return self.normalized_data.shape[0]
+        
+    def __getitem__(self, idx):
+        coords, gt = self.coordinates[idx,:], self.normalized_data[idx, :]
+        input = {
+            'coords': coords,
+            'gt': gt
+        }
+        return input
+
+        

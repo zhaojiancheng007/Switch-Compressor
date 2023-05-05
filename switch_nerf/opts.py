@@ -50,8 +50,6 @@ def get_opts_base():
     parser.add_argument('--skip_layers', type=int, nargs='+', default=[4], help='indices of the skip connections')
     parser.add_argument('--layer_dim', type=int, default=256, help='number of channels in foreground MLP')
     parser.add_argument('--bg_layer_dim', type=int, default=256, help='number of channels in background MLP')
-    parser.add_argument('--appearance_dim', type=int, default=48,
-                        help='dimension of appearance embedding vector (set to 0 to disable)')
     parser.add_argument('--affine_appearance', default=False, action='store_true',
                         help='set to true to use affine transformation for appearance instead of latent embedding')
 
@@ -74,7 +72,7 @@ def get_opts_base():
     parser.add_argument('--no_shifted_softplus', dest='shifted_softplus', default=True, action='store_false',
                         help='use ReLU instead of shifted softplus activation')
 
-    parser.add_argument('--batch_size', type=int, default=1024, help='batch size')
+    
     parser.add_argument('--image_pixel_batch_size', type=int, default=64 * 1024,
                         help='number of pixels to evaluate per split when rendering validation images')
     parser.add_argument('--model_chunk_size', type=int, default=32 * 1024,
@@ -83,17 +81,13 @@ def get_opts_base():
     parser.add_argument('--perturb', type=float, default=1.0, help='factor to perturb depth sampling points')
     parser.add_argument('--noise_std', type=float, default=1.0, help='std dev of noise added to regularize sigma')
 
-    parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
-    parser.add_argument('--lr_decay_factor', type=float, default=0.1, help='learning rate decay factor')
 
-    parser.add_argument('--no_bg_nerf', dest='bg_nerf', default=True, action='store_false',
-                        help='do not use background MLP')
+
 
     parser.add_argument('--ellipse_scale_factor', type=float, default=1.1, help='Factor to scale foreground bounds')
     parser.add_argument('--no_ellipse_bounds', dest='ellipse_bounds', default=True, action='store_false',
                         help='use spherical foreground bounds instead of ellipse')
 
-    parser.add_argument('--train_iterations', type=int, default=500000, help='training iterations')
     parser.add_argument('--val_interval', type=int, default=500001, help='validation interval')
     parser.add_argument('--ckpt_interval', type=int, default=10000, help='checkpoint interval')
 
@@ -112,14 +106,9 @@ def get_opts_base():
     parser.add_argument('--bg_use_cfg', default=False, action='store_true',
                         help='read the bg_nerf from the config file, if bg_use_moe is True, then bg_use_cfg should also be true')
     parser.add_argument("--moe_expert_num", type=int, default=8, 
-                        help='number of expert')
-    parser.add_argument("--moe_l_aux_wt", type=float, default=1e-2, 
-                        help='l_aux_wt of tutel moe')    
+                        help='number of expert')  
     parser.add_argument("--moe_capacity_factor", type=float, default=1.25, 
-                        help='capacity_factor of tutel moe')
-    
-    parser.add_argument('--model', type=yaml.safe_load, 
-                        help='detailed definition of nerf network layers')   
+                        help='capacity_factor of tutel moe')  
     parser.add_argument('--model_bg', type=yaml.safe_load, 
                         help='detailed definition of bg_nerf network layers')    
     parser.add_argument('--no_expert_parallel', default=True, action='store_true',
@@ -130,9 +119,6 @@ def get_opts_base():
                         help='not use load balance loss in moe')
     parser.add_argument("--i_print",   type=int, default=100, 
                         help='frequency of console printout and metric logging')
-    parser.add_argument('--find_unused_parameters', default=False, action='store_true',
-                        help='whether using moe nerf')
-    parser.add_argument('--no_find_unused_parameters', dest='find_unused_parameters', default=False, action='store_false')
     parser.add_argument("--moe_use_residual", default=False, action='store_true', 
                         help='use residual moe')
     parser.add_argument("--moe_expert_type", type=str, default='expertmlp', 
@@ -217,16 +203,11 @@ def get_opts_base():
     parser.add_argument("--dispatcher_no_postscore", action='store_true', default=False, 
                         help='multiply gate score before feeded into moe')
 
-    parser.add_argument("--use_sigma_noise", action='store_true', default=False, 
-                        help='use noise for sigma')
-    parser.add_argument("--sigma_noise_std", type=float, default=1.0,
-                        help='std of noise for sigma')
 
     parser.add_argument("--no_optimizer_schedulers", action='store_true', default=False, 
                         help='diable learning scheduler')
 
-    parser.add_argument("--data_loader_num_workers", type=int, default=1,
-                        help='num_workers arg in data loader')
+
     parser.add_argument("--disable_check_finite", action='store_true', default=False, 
                         help='disable check_finite after forward for efficiency and stable training')
 
@@ -267,5 +248,54 @@ def get_opts_base():
     
     parser.add_argument("--use_random_background_color", default=False, action='store_true',
                         help='''use_random_background_color when rendering''')
+    
+
+    # our moe
+#################### 256 x 256 x 256 #####################
+  # /data/sci/dataset/brain/64x64x64/brain-64_128-64_128-192_256.tif
+  # /data/sci/dataset/brain/256x256x256/brain-0_256-0_256-0_256.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/50.16um_2020-27_heart_pag-0.24_0.41_jp2__1024_128_384.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/25.08um_LADAF_2020-27_kidney-left_jp2__1024_128_384.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/50.16um_LADAF-2020-31_brain_pag-0.04_0.10_jp2__0_0_256.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/52.76um_FO-20.129_lung-left_upper-lobe_pag-0.15_0.03_jp2__512_128_384.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/heart-0_256-0_256-0_256.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/kidney-0_256-0_256-0_256.tif
+  # /data/sci/dataset/cvpr_dataset/HiPCT/lung-0_256-0_256-0_256.tif
+#################### 512 x 512 x 512 #####################
+  # /data/zjc/sci/brain/4.9um_LADAF-2020-31_brain_cerebellum_pag-512crop.tif
+  # /data/zjc/sci/kidney/2.58um_LADAF_2020-27_kidney-left_512crop.tif
+  # /data/zjc/sci/lung/4.44um_FO-20.129_lung-left_upper-lobe_512crop.tif
+  # /data/zjc/sci/heart/4.44um_LADAF-2020.27_heart_512crop.tif
+#################### 1024 x 1024 x 1024 #####################
+    parser.add_argument('--data_path', type=str, default='/data/sci/dataset/cvpr_dataset/HiPCT/heart-0_256-0_256-0_256.tif',
+                        help='path to data')
+    parser.add_argument('--train_iterations', type=int, default=500000, help='training iterations')
+    parser.add_argument('--batch_size', type=int, default=1200000, help='batch size')
+    parser.add_argument("--data_loader_num_workers", type=int, default=1,
+                        help='num_workers arg in data loader')
+    parser.add_argument('--no_bg_nerf', dest='bg_nerf', default=False, action='store_false',
+                        help='do not use background MLP')
+    parser.add_argument("--close_bg_nerf", action='store_true', default=None, 
+                        help='set None to close bg_nerf')
+    parser.add_argument("--close_fine_sample", default=0., 
+                        help='close fine sample')
+    parser.add_argument('--appearance_dim', type=int, default=0,
+                        help='dimension of appearance embedding vector (set to 0 to disable)')
+    # parser.add_argument('--n_random_training_samples', type=int, default=1000000,
+    #                     help='path to data')
+    parser.add_argument("--moe_l_aux_wt", type=float, default=1e-2, 
+                        help='l_aux_wt of tutel moe')  
+    parser.add_argument('--model', type=yaml.safe_load, 
+                        help='detailed definition of nerf network layers') 
+    parser.add_argument('--find_unused_parameters', default=False, action='store_true',
+                        help='whether using moe nerf')
+    parser.add_argument('--no_find_unused_parameters', dest='find_unused_parameters', default=False, action='store_false')
+
+    parser.add_argument('--lr', type=float, default=5e-4, help='learning rate')
+    parser.add_argument('--lr_decay_factor', type=float, default=0.1, help='learning rate decay factor')
+    parser.add_argument("--use_sigma_noise", action='store_true', default=False, 
+                        help='use noise for sigma')
+    parser.add_argument("--sigma_noise_std", type=float, default=1.0,
+                        help='std of noise for sigma')
                         
     return parser

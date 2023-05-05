@@ -65,6 +65,8 @@ class TopKGate(torch.nn.Module):
         self.use_load_importance_loss = use_load_importance_loss
         self.compute_balance_loss = compute_balance_loss
         self.dispatcher_no_score = dispatcher_no_score
+        # self.gate_dim: 256
+        #  num_global_experts: 8
         self.wg = torch.nn.Linear(self.gate_dim, num_global_experts, bias=False)
         
 
@@ -250,13 +252,13 @@ class TopKGate(torch.nn.Module):
                 logits = wg(input.to(next(iter(wg.parameters())).dtype))
             else:
                 logits = wg(gate_input.to(next(iter(wg.parameters())).dtype))
-        
+        # logits for gate
         if ctx.use_scaled_dot:
             logits = logits * self.dot_scale
         
         if self.use_normal_noise and ctx.training:
             logits = logits + torch.randn_like(logits, device=logits.device) / self.num_global_experts # Scaling Vision with Sparse Mixture of Experts
-
+        # add noise for training
         if self.training and self.gate_noise > 0:
             logits_w_noise = logits + self.gate_noise * torch.randn_like(logits) / self.num_global_experts
         else:
@@ -264,9 +266,9 @@ class TopKGate(torch.nn.Module):
         
         if ctx.use_scaled_dot:
             logits_w_noise = logits_w_noise * self.dot_scale
-
+        # softmax
         gates = F.softmax(logits_w_noise, dim=1)
-
+        # aux_loss
         if self.use_load_importance_loss:
             critical_data, l_loss, l_balance_loss = extract_critical_load_importance_nobatch(gates, F.softmax(logits, dim=1), logits_w_noise, 
                 self.top_k, self.gate_noise, capacity_factor=self.capacity_factor, 
@@ -282,10 +284,11 @@ class TopKGate(torch.nn.Module):
         world_size = C.get_world_size(group)
 
         # if not hasattr(self, '_fdr_nobatch'):
+############################### dispatch ####################################
         self._fdr_nobatch = fast_dispatcher_nobatch(num_global_experts=g_experts, capacity=capacity, model_dim=M, dispatch_dtype=input.dtype)
 
         self._fdr_nobatch.update(*critical_data[1:], is_postscore=self.is_postscore, dispatcher_no_score=self.dispatcher_no_score)
-
+        # apply dispatch
         dispatched_input = self._fdr_nobatch.encode(input)
 
         if ctx.auto_parallel:
@@ -316,10 +319,11 @@ class TopKGate(torch.nn.Module):
 
             chunk_size = expert_input_nums_a2a.shape[0] // world_size
             expert_input_nums_input = torch.split(expert_input_nums_a2a, chunk_size)
-
+######################### test dispatch ############################
             if ctx.expert_type == 'seqexperts' or ctx.expert_type == 'multiseqexperts':
                 dispatched_input = torch.split(dispatched_input, expert_input_nums_a2a_chunk_sum.tolist(), dim=0)
                 expert_output = ctx.expert_fn([dispatched_input, expert_input_nums_input])
+######################## training dispatch ##########################            
             else:
                 expert_output = ctx.expert_fn(dispatched_input)
 
@@ -350,8 +354,6 @@ class TopKGate(torch.nn.Module):
             extras["balance_loss"] = l_balance_loss
 
         return result_output, l_loss, extras
-
-
 
     def apply_on_expert_fn_nobatch_torch(self, input, ctx, gate_input=None):
         # input = input.to(next(iter(ctx.experts.parameters())).dtype)
@@ -424,10 +426,10 @@ class TopKGate(torch.nn.Module):
 
         return result_output, l_loss, extras
 
-
 class MOELayer(torch.nn.Module):
     """Tutel optimized MOELayer
     """
+    
     @staticmethod
     def global_expert_count(num_local_experts, group=None):
         if not isinstance(num_local_experts, int):
@@ -471,16 +473,18 @@ class MOELayer(torch.nn.Module):
         self.return_gate_logits = return_gate_logits
         self.use_scaled_dot = use_scaled_dot
 
+        # experts是否以字典的形式输入
         if not isinstance(experts, dict):
             self.is_builtin_experts = False
             self.num_local_experts = len(self.experts)
         else:
             self.is_builtin_experts = True
             self.num_local_experts = experts.get('count_per_node', 1)
-
+        # num_global_experts
         self.num_global_experts = MOELayer.global_expert_count(self.num_local_experts, self.group)
 
         num_devices = C.get_world_size(self.group)
+        # 设置的experts总数量 vs 设备数量
         if self.num_global_experts < num_devices:
             sharded_count = num_devices // self.num_global_experts
             assert experts['hidden_size_per_expert'] % sharded_count == 0, f"Can't evenly divide hidden_size_per_expert ({experts['hidden_size_per_expert']}) to {sharded_count} slices"
@@ -496,14 +500,17 @@ class MOELayer(torch.nn.Module):
             self.auto_parallel, self.use_model_parallel = True, False
         else:
             self.auto_parallel, self.use_model_parallel = False, (parallel_type == 'model')
-
+        # hidden_size_per_expert: 256
+        # model_dim: 256
         self.hidden_size = experts.get('hidden_size_per_expert', 'None')
         self.model_dim = model_dim
         self.sharded_count = sharded_count
-
+        # False
         if self.use_residual:
             self.coefficient = torch.nn.Linear(model_dim, 2)
 
+############### Experts ############### 
+        # self.expert: modulist
         if not isinstance(experts, dict):
             self.experts = cast(ModuleList, experts) if type(experts) == ModuleList else ModuleList(experts)
             self.expert_type = None
@@ -640,6 +647,7 @@ class MOELayer(torch.nn.Module):
                 if self.use_residual:
                     self.residual_expert = FusedExpertsNetwork(model_dim, self.hidden_size, 1, 
                         init_trunc_normal=experts.get('init_trunc_normal', False), init_factor=experts['init_factor'])
+            # for testing, 
             elif experts['type'] == 'seqexperts' or experts['type'] == 'multiseqexperts':
                 if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
@@ -650,6 +658,9 @@ class MOELayer(torch.nn.Module):
                         self.residual_expert = SeqExperts(net[0], local_experts=1)
                     else:
                         self.residual_expert = SeqExperts(net, local_experts=1)
+            # for training
+            # layer_num = 7, model_dim = 256, 
+            # local_experts = 1, activation_fn = relu
             elif experts['type'] == 'expertmlp':
                 if seeds is not None and seeds[1] is not None:
                     torch.manual_seed(seeds[1])
@@ -677,6 +688,7 @@ class MOELayer(torch.nn.Module):
                 for n, p in expert.named_parameters():
                     scan_expert_func(n, p)
 
+################## Gating Network, self.gates #######################
         if isinstance(gate_type, str):
             assert re.match(r'^Top[0-9]+Gate$', gate_type), "Unrecognized gate_type: %s" % gate_type
             top_k = int(gate_type[3:-4])
@@ -703,7 +715,7 @@ class MOELayer(torch.nn.Module):
             torch.manual_seed(seeds[2])
 
         def expert_fn(input):
-            if self.is_builtin_experts:
+            if self.is_builtin_experts:# Trye
                 if self.expert_type == 'ffn':
                     expert_output = self.experts[0](input, self)
                 elif self.expert_type == 'seqexperts' or self.expert_type == 'multiseqexperts':
@@ -730,6 +742,7 @@ class MOELayer(torch.nn.Module):
         else:
             raise Exception("Specified parameter type is not recognized: %s. Valid `param_type` includes: gate, local_experts." % param_type)
 
+############# MOE forward ##############
     def forward(self, input: Tensor, gate_index=0, **kwargs):
         if self.skip_moe:
             result_output = input
@@ -798,8 +811,9 @@ class MOELayer(torch.nn.Module):
 
 moe_layer = MOELayer
 
-
+# for test, self.expert
 class SeqExperts(torch.nn.Module):
+    # expert: 自定义的nn.module
     def __init__(self, expert, local_experts=1):
         super(SeqExperts, self).__init__()
 
@@ -833,7 +847,7 @@ class SeqExperts(torch.nn.Module):
 
         return output
 
-
+# for train, self.expert
 class ExpertMLP(torch.nn.Module):
     # one layer MLP with experts
     def __init__(self, model_dim, local_experts, layer_num, skips=None, activation=F.relu, init_factor=1.0, init_trunc_normal=False):
@@ -851,6 +865,8 @@ class ExpertMLP(torch.nn.Module):
         self.bias = nn.ParameterList()
 
         for j in range(self.layer_num):
+            # fc1_weight: [1, 256, 256]
+            # fc1_bias: [1, 1, 256]
             fc1_weight = nn.Parameter(torch.zeros(local_experts, model_dim, self.hidden_dim))
             fc1_bias = nn.Parameter(torch.zeros(local_experts, 1, self.hidden_dim))
             for i in range(local_experts):
@@ -862,7 +878,7 @@ class ExpertMLP(torch.nn.Module):
                 else:
                     with torch.no_grad():
                         fc1_weight[i, :, :], fc1_bias[i, :, :] = fc1.weight.t() * init_factor, fc1.bias * init_factor
-            
+            # [0,1,2,3,4,5,6]
             self.weights.append(fc1_weight)
             self.bias.append(fc1_bias)
 
@@ -885,7 +901,8 @@ class ExpertMLP(torch.nn.Module):
                         fc1_weight[i, :, :], fc1_bias[i, :, :] = fc1.weight.t() * self.init_factor, fc1.bias * self.init_factor
 
     def forward(self, x, ctx):
-        # x: 1, E, N, C
+        # x: first_linear层的输出： 1, E, N, C
+        # E, N, C
         x = x.squeeze(0)
         h = x
         for layer_id in range(self.layer_num):
@@ -922,7 +939,6 @@ class ExpertMLP(torch.nn.Module):
                     h = self.activation(h)
 
         return h.unsqueeze(0)
-
 
 class SingleExpert(torch.nn.Module):
     # one layer MLP with experts

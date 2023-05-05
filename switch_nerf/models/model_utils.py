@@ -67,24 +67,16 @@ def convert_to_seqexperts2(state_dict, moe_layer_ids):
     return state_dict
 
 def get_nerf(hparams: Namespace, appearance_count: int) -> nn.Module:
-    return _get_nerf_inner(hparams, appearance_count, hparams.layer_dim, 3, 'model_state_dict')
+    return _get_nerf_inner(hparams, 
+                           appearance_count, 
+                           hparams.layer_dim, # 256
+                           3, 
+                           'model_state_dict')
 
-
-def get_bg_nerf(hparams: Namespace, appearance_count: int) -> nn.Module:
-    if hparams.bg_use_cfg:
-        tmp_use_moe = hparams.use_moe
-        hparams.use_moe = hparams.bg_use_moe
-        bg_nerf = _get_nerf_inner(hparams, appearance_count, hparams.bg_layer_dim, 4, 'bg_model_state_dict')
-        hparams.use_moe = tmp_use_moe
-    else:
-        tmp_use_moe = hparams.use_moe
-        hparams.use_moe = False
-        bg_nerf = _get_nerf_inner(hparams, appearance_count, hparams.bg_layer_dim, 4, 'bg_model_state_dict')
-        hparams.use_moe = tmp_use_moe
-    return bg_nerf
-
-
-def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, xyz_dim: int,
+def _get_nerf_inner(hparams: Namespace, 
+                    appearance_count: int, 
+                    layer_dim: int, 
+                    xyz_dim: int,
                     weight_key: str) -> nn.Module:
     if hparams.container_path is not None:
         container = torch.jit.load(hparams.container_path, map_location='cpu')
@@ -121,7 +113,7 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
         nerf = MegaNeRF(
             [_get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim) for _ in
              range(len(centroids))], centroids, 1, xyz_dim == 4, centroid_metadata['cluster_2d'], True)
-    elif hparams.use_moe:
+    elif hparams.use_moe: # True
         if weight_key == "model_state_dict":
             model_cfg_name = "model"
         elif weight_key == "bg_model_state_dict":
@@ -129,10 +121,13 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
         else:
             model_cfg_name = None
             raise NotImplementedError
-        nerf = get_nerf_moe_inner(hparams, appearance_count, xyz_dim, model_cfg_name=model_cfg_name)
+        nerf = get_nerf_moe_inner(hparams, 
+                                  appearance_count, 
+                                  xyz_dim, 
+                                  model_cfg_name=model_cfg_name) # ''
     else:
         nerf = _get_single_nerf_inner(hparams, appearance_count, layer_dim, xyz_dim)
-
+    # 加载训练模型参数
     if hparams.ckpt_path is not None:
         state_dict = torch.load(hparams.ckpt_path, map_location='cpu')[weight_key]
 
@@ -151,6 +146,22 @@ def _get_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, x
         nerf.load_state_dict(model_dict)
 
     return nerf
+
+
+
+def get_bg_nerf(hparams: Namespace, appearance_count: int) -> nn.Module:
+    if hparams.bg_use_cfg:
+        tmp_use_moe = hparams.use_moe
+        hparams.use_moe = hparams.bg_use_moe
+        bg_nerf = _get_nerf_inner(hparams, appearance_count, hparams.bg_layer_dim, 4, 'bg_model_state_dict')
+        hparams.use_moe = tmp_use_moe
+    else:
+        tmp_use_moe = hparams.use_moe
+        hparams.use_moe = False
+        bg_nerf = _get_nerf_inner(hparams, appearance_count, hparams.bg_layer_dim, 4, 'bg_model_state_dict')
+        hparams.use_moe = tmp_use_moe
+    return bg_nerf
+
 
 
 def _get_single_nerf_inner(hparams: Namespace, appearance_count: int, layer_dim: int, xyz_dim: int) -> nn.Module:

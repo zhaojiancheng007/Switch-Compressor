@@ -6,6 +6,7 @@ from torch import nn
 from torch.cuda.amp import custom_bwd, custom_fwd
 from torch.autograd import Function
 
+# num_freqs = pos_xyz_dim = 12
 class Embedding(nn.Module):
     def __init__(self, num_freqs: int, logscale=True):
         """

@@ -11,7 +11,7 @@ def _get_train_opts() -> Namespace:
     parser = get_opts_base()
 
     parser.add_argument('--exp_name', type=str, required=True, help='experiment name')
-    parser.add_argument('--dataset_path', type=str, required=True)
+    parser.add_argument('--dataset_path', type=str, required=False)
 
     return parser.parse_args()
 

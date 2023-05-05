@@ -1,0 +1,109 @@
+# generate chunks
+CUDA_VISIBLE_DEVICES=1 python -m torch.distributed.launch --use_env --master_port=12345 --nproc_per_node=1 -m switch_nerf.train --config=switch_nerf/configs/switch_nerf/building.yaml --use_moe --exp_name=building/absolute/experiment/path --dataset_path=/data/zcq/switchnerf/building-pixsfm --chunk_paths=building/absolute/chunk/path/building_chunk_factor_1_bg --generate_chunk
+# train
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python -m torch.distributed.launch \
+--use_env --master_port=12345 --nproc_per_node=8 -m \
+switch_nerf.train \
+--config=switch_nerf/configs/switch_nerf/moe.yaml \
+--use_moe \
+--exp_name=building/absolute/experiment/path \
+--dataset_path=/data/zcq/switchnerf/building-pixsfm \
+--chunk_paths=building/absolute/chunk/path/building_chunk_factor_1_bg \
+--use_balance_loss \
+--i_print=1000 \
+--batch_size=8192 \
+--moe_expert_type=expertmlp \
+--moe_train_batch \
+--moe_test_batch \
+--model_chunk_size=131072 \
+--moe_capacity_factor=1.0 \
+--batch_prioritized_routing \
+--moe_l_aux_wt=0.0005 \
+--amp_use_bfloat16 \
+--use_moe_external_gate \
+--use_gate_input_norm \
+--use_sigma_noise \
+--sigma_noise_std=1.0
+
+# train for moe
+CUDA_VISIBLE_DEVICES=1,2,3,5,6,7 python -m torch.distributed.launch \
+--use_env --master_port=12345 --nproc_per_node=6 -m \
+switch_nerf.train \
+--config=switch_nerf/configs/switch_nerf/moe.yaml \
+--use_moe \
+--exp_name=moe/ \
+--use_balance_loss \
+--i_print=1000 \
+--batch_size=1200000 \
+--moe_expert_type=expertmlp \
+--moe_train_batch \
+--moe_test_batch \
+--moe_capacity_factor=1.0 \
+--batch_prioritized_routing \
+--moe_l_aux_wt=0.0005 \
+--amp_use_bfloat16 \
+--use_moe_external_gate \
+--use_gate_input_norm \
+--use_sigma_noise \
+--sigma_noise_std=1.0
+
+# test for moe
+# 还是跑train的代码，moe_expert_type=seqexperts
+CUDA_VISIBLE_DEVICES=1,2,3,5,6,7 python -m torch.distributed.launch \
+--use_env --master_port=12345 --nproc_per_node=6 -m \
+switch_nerf.eval_image \
+--config=switch_nerf/configs/switch_nerf/moe.yaml \
+--use_moe --exp_name=moe \
+--dataset_path=/data/zcq/switchnerf/building-pixsfm \
+--i_print=1000 \
+--moe_expert_type=seqexperts \
+--model_chunk_size=131072 \
+--ckpt_path=Switch-NeRF-ckpt/building.pt \
+--expertmlp2seqexperts \
+--use_moe_external_gate \
+--use_gate_input_norm
+
+#checkpoint
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch \
+--use_env --master_port=12345 --nproc_per_node=4 -m \
+switch_nerf.eval_image \
+--config=switch_nerf/configs/switch_nerf/building.yaml \
+--use_moe --exp_name=building/absolute/experiment/path \
+--dataset_path=/data/zcq/switchnerf/building-pixsfm \
+--i_print=1000 \
+--moe_expert_type=seqexperts \
+--model_chunk_size=131072 \
+--ckpt_path=Switch-NeRF-ckpt/building.pt \
+--expertmlp2seqexperts \
+--use_moe_external_gate \
+--use_gate_input_norm
+
+#visualization,生成点云
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch \
+--use_env --master_port=12345 --nproc_per_node=4 -m \
+switch_nerf.eval_points \
+--config=switch_nerf/configs/switch_nerf/building.yaml \
+--use_moe --exp_name=building/absolute/experiment/path \
+--dataset_path=/data/zcq/switchnerf/building-pixsfm \
+--i_print=1000 \
+--moe_expert_type=seqexperts \
+--model_chunk_size=131072 \
+--ckpt_path=Switch-NeRF-ckpt/building.pt \
+--expertmlp2seqexperts \
+--use_moe_external_gate \
+--use_gate_input_norm \
+--moe_return_gates \
+--return_pts \
+--return_pts_rgb \
+--return_pts_alpha \
+--render_test_points_sample_skip=4 \
+--val_scale_factor=8 \
+--render_test_points_image_num=20
+
+# Merge point clouds from differents
+python -m switch_nerf.scripts.merge_points \
+--data_path=/data/Switch-NeRF/building/absolute/experiment/path/0/eval_points \
+--merge_all \
+--image_num=20 \
+--model_type=switch \
+-r=0.2
